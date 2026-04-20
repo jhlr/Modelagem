@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_file, abort
+from flask_cors import CORS
 from db import execute, init_db
 import os
 import io
@@ -8,6 +9,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 app = Flask(__name__)
+CORS(app)
 
 
 @app.route('/init-db', methods=['POST'])
