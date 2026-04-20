@@ -131,6 +131,19 @@ def query_hierarquia():
     return jsonify(rows)
 
 
+@app.route('/query/counts_por_categoria', methods=['GET'])
+def query_counts_categoria():
+    sql = (
+        "SELECT c.tipo, COUNT(*) AS registros "
+        "FROM Registro r "
+        "JOIN Metrica m ON r.id_metrica = m.id_metrica "
+        "JOIN Categoria c ON m.id_categoria = c.id_categoria "
+        "GROUP BY c.tipo"
+    )
+    rows = execute(sql, fetch=True)
+    return jsonify(rows)
+
+
 @app.route('/plot/media_por_categoria.png', methods=['GET'])
 def plot_media_por_categoria():
     data = execute(

@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:5000';
+const API_BASE = 'http://127.0.0.1:5001';
 
 async function fetchJson(path) {
   const res = await fetch(API_BASE + path);
@@ -8,12 +8,17 @@ async function fetchJson(path) {
 
 // Chart instance
 let mediaChart = null;
+let mediaPieChart = null;
 
 async function loadMediaChart() {
   try {
     const data = await fetchJson('/query/media_por_categoria');
     const labels = data.map(d => d.tipo);
-    const values = data.map(d => parseFloat(d.media_valor));
+    const values = data.map(d => {
+      const v = d.media_valor;
+      const n = v === null || v === undefined ? 0 : Number(v);
+      return Number.isNaN(n) ? 0 : n;
+    });
     const ctx = document.getElementById('mediaChart').getContext('2d');
     if (mediaChart) mediaChart.destroy();
     mediaChart = new Chart(ctx, {
@@ -24,6 +29,31 @@ async function loadMediaChart() {
       },
       options: { responsive: true, maintainAspectRatio: false }
     });
+
+    // pie chart: if all zeros, try counts fallback
+    const sum = values.reduce((s,v)=>s+v,0);
+    const pieEl = document.getElementById('mediaPieChart');
+    if (!pieEl) return;
+    const pieCtx = pieEl.getContext('2d');
+    if (sum === 0) {
+      try {
+        const counts = await fetchJson('/query/counts_por_categoria');
+        const cLabels = counts.map(c=>c.tipo);
+        const cValues = counts.map(c=>Number(c.registros)||0);
+        const colors = cLabels.map((_,i)=>`hsl(${(i*60)%360},70%,50%)`);
+        if (mediaPieChart) mediaPieChart.destroy();
+        mediaPieChart = new Chart(pieCtx, { type: 'pie', data: { labels: cLabels, datasets: [{ data: cValues, backgroundColor: colors }] }, options: { responsive: true, maintainAspectRatio: false } });
+      } catch (e) {
+        // if counts endpoint not available, show empty pie with labels
+        const colors = labels.map((_,i)=>`hsl(${(i*60)%360},70%,50%)`);
+        if (mediaPieChart) mediaPieChart.destroy();
+        mediaPieChart = new Chart(pieCtx, { type: 'pie', data: { labels, datasets: [{ data: values, backgroundColor: colors }] }, options: { responsive: true, maintainAspectRatio: false } });
+      }
+    } else {
+      const colors = labels.map((_,i)=>`hsl(${(i*60)%360},70%,50%)`);
+      if (mediaPieChart) mediaPieChart.destroy();
+      mediaPieChart = new Chart(pieCtx, { type: 'pie', data: { labels, datasets: [{ data: values, backgroundColor: colors }] }, options: { responsive: true, maintainAspectRatio: false } });
+    }
   } catch (err) {
     console.error(err);
     alert('Erro ao carregar dados: ' + err.message);
