@@ -1,0 +1,21 @@
+Gráfico de Pizza: Distribuição de StatusObjetivo: 
+Mostrar o percentual de conformidade dos dados coletados.
+SQL para o gráfico:
+
+SELECT status, COUNT(*) as total FROM Registro GROUP BY status; [cite: 42]
+
+Visual: Uma fatia para "VALIDADO", uma para "PENDENTE" e outra para "REJEITADO".
+Gráfico de Linhas: Evolução Temporal de Métricas
+Objetivo: Monitorar a maturidade sustentável ao longo do tempo.
+SQL para o gráfico:
+
+SELECT DATE(data_hora) as data, AVG(valor_medido) as media 
+FROM Registro 
+WHERE id_metrica = ? 
+GROUP BY DATE(data_hora) 
+ORDER BY data_hora; [cite: 42]
+
+Visual: O eixo X representa o tempo (datas) e o eixo Y o valor médio medido, 
+permitindo ver se a empresa está melhorando seus índices ESG
+
+
