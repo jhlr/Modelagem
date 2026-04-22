@@ -3,9 +3,9 @@ from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-try:
-	# when imported as package (src.streamlit)
-	from . import db
+import re
+
+try: from . import db
 except Exception:
 	import db
 
@@ -23,30 +23,48 @@ BASE_DIR = Path(__file__).resolve().parent
 CSV_PATH = BASE_DIR.parent / "AlteradForms_Diagnostico_de_Sustentabilidade_MODELO.csv"
 
 
+def resolve_table(name):
+	"""Return actual table name in sqlite matching `name` case-insensitively, or None."""
+	rows = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)=%s", (name.lower(),), fetch=True)
+	if rows:
+		return rows[0]['name']
+	return None
+
+
 def load_companies():
-	rows = db.execute(
-		"SELECT id_empresa, nome_fantasia, cnpj, cidade, id_empresa_mae FROM empresa ORDER BY id_empresa",
-		fetch=True,
-	)
+	tbl = resolve_table('empresa') or resolve_table('Empresa')
+	if not tbl:
+		return pd.DataFrame()
+	q = f"SELECT id_empresa, nome_fantasia, cnpj, cidade, id_empresa_mae FROM {tbl} ORDER BY id_empresa"
+	rows = db.execute(q, fetch=True)
 	return pd.DataFrame(rows)
 
 
 def create_empresa(nome, cnpj, cidade, id_mae):
+	tbl = resolve_table('empresa') or resolve_table('Empresa')
+	if not tbl:
+		raise RuntimeError("Tabela 'Empresa' não encontrada no DB")
 	db.execute(
-		"INSERT INTO empresa (nome_fantasia, cnpj, cidade, id_empresa_mae) VALUES (%s, %s, %s, %s)",
+		f"INSERT INTO {tbl} (nome_fantasia, cnpj, cidade, id_empresa_mae) VALUES (%s, %s, %s, %s)",
 		(nome, cnpj or None, cidade or None, id_mae or None),
 	)
 
 
 def update_empresa(id_empresa, nome, cnpj, cidade, id_mae):
+	tbl = resolve_table('empresa') or resolve_table('Empresa')
+	if not tbl:
+		raise RuntimeError("Tabela 'Empresa' não encontrada no DB")
 	db.execute(
-		"UPDATE empresa SET nome_fantasia=%s, cnpj=%s, cidade=%s, id_empresa_mae=%s WHERE id_empresa=%s",
+		f"UPDATE {tbl} SET nome_fantasia=%s, cnpj=%s, cidade=%s, id_empresa_mae=%s WHERE id_empresa=%s",
 		(nome, cnpj or None, cidade or None, id_mae or None, id_empresa),
 	)
 
 
 def delete_empresa(id_empresa):
-	db.execute("DELETE FROM empresa WHERE id_empresa=%s", (id_empresa,))
+	tbl = resolve_table('empresa') or resolve_table('Empresa')
+	if not tbl:
+		raise RuntimeError("Tabela 'Empresa' não encontrada no DB")
+	db.execute(f"DELETE FROM {tbl} WHERE id_empresa=%s", (id_empresa,))
 
 
 def contagem_sim_por_pergunta_estratificado():
@@ -217,37 +235,204 @@ def render_empresas():
 
 def render_auditoria():
 	st.header('Auditoria')
-	rows = db.execute('SELECT * FROM auditoria LIMIT 500', fetch=True)
+	# check table exists (case-insensitive)
+	t = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)='auditoria'", fetch=True)
+	if not t:
+		st.info("Tabela 'Auditoria' não encontrada no DB. Use DB -> Inicializar DB (create_db.sql) ou crie a tabela manualmente.")
+		return
+	rows = db.execute('SELECT * FROM Auditoria LIMIT 500', fetch=True)
 	st.dataframe(pd.DataFrame(rows))
 
 
 def render_hierarquia():
 	st.header('Hierarquia de Empresas')
-	rows = db.execute(
-		'SELECT id_empresa, nome_fantasia, id_empresa_mae FROM empresa ORDER BY id_empresa',
-		fetch=True,
-	)
+	tbl = resolve_table('empresa') or resolve_table('Empresa')
+	if not tbl:
+		st.info("Tabela 'Empresa' não encontrada no DB. Use DB -> Inicializar DB (create_db.sql) ou crie a tabela manualmente.")
+		return
+	rows = db.execute(f'SELECT id_empresa, nome_fantasia, id_empresa_mae FROM {tbl} ORDER BY id_empresa', fetch=True)
 	st.dataframe(pd.DataFrame(rows))
+
+
+def load_unidades():
+	t = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Unidade'", fetch=True)
+	if not t:
+		return pd.DataFrame()
+	rows = db.execute('SELECT id_unidade, id_empresa, nome_unidade, localizacao FROM Unidade ORDER BY id_empresa, id_unidade', fetch=True)
+	return pd.DataFrame(rows)
+
+
+def create_unidade(id_unidade, id_empresa, nome_unidade, localizacao):
+	db.execute(
+		'INSERT INTO Unidade (id_unidade, id_empresa, nome_unidade, localizacao) VALUES (%s, %s, %s, %s)',
+		(id_unidade, id_empresa, nome_unidade or None, localizacao or None),
+	)
+
+
+def update_unidade(old_id_unidade, old_id_empresa, id_unidade, id_empresa, nome_unidade, localizacao):
+	db.execute(
+		'UPDATE Unidade SET id_unidade=%s, id_empresa=%s, nome_unidade=%s, localizacao=%s WHERE id_unidade=%s AND id_empresa=%s',
+		(id_unidade, id_empresa, nome_unidade or None, localizacao or None, old_id_unidade, old_id_empresa),
+	)
+
+
+def delete_unidade(id_unidade, id_empresa):
+	db.execute('DELETE FROM Unidade WHERE id_unidade=%s AND id_empresa=%s', (id_unidade, id_empresa))
+
+
+def render_unidades():
+	st.header('Unidades (CRUD)')
+	df = load_unidades()
+	if df.empty:
+		st.info('Tabela `Unidade` não encontrada ou sem registros. Use o botão DB->Inicializar DB se necessário.')
+		return
+
+	st.write('Total unidades:', len(df))
+	st.dataframe(df)
+
+	st.subheader('Adicionar nova unidade')
+	with st.form('add_unidade'):
+		id_un = st.number_input('ID Unidade', min_value=1, value=1)
+		id_emp = st.number_input('ID Empresa', min_value=1, value=1)
+		nome = st.text_input('Nome unidade')
+		loc = st.text_input('Localização')
+		submitted = st.form_submit_button('Adicionar')
+		if submitted:
+			create_unidade(int(id_un), int(id_emp), nome, loc)
+			safe_rerun()
+
+	st.subheader('Editar / Apagar')
+	ids = df[['id_unidade', 'id_empresa']].apply(lambda r: f"{r['id_unidade']}|{r['id_empresa']}", axis=1).tolist()
+	if ids:
+		sel = st.selectbox('Escolha unidade (id_unidade|id_empresa)', options=ids)
+		id_u, id_e = sel.split('|')
+		row = df[(df['id_unidade'] == int(id_u)) & (df['id_empresa'] == int(id_e))].iloc[0]
+		with st.form('edit_unidade'):
+			id_un2 = st.number_input('ID Unidade', min_value=1, value=int(row['id_unidade']))
+			id_emp2 = st.number_input('ID Empresa', min_value=1, value=int(row['id_empresa']))
+			nome2 = st.text_input('Nome unidade', value=row['nome_unidade'] if pd.notna(row['nome_unidade']) else '')
+			loc2 = st.text_input('Localização', value=row['localizacao'] if pd.notna(row['localizacao']) else '')
+			upd = st.form_submit_button('Atualizar')
+			if upd:
+				update_unidade(int(id_u), int(id_e), int(id_un2), int(id_emp2), nome2, loc2)
+				safe_rerun()
+		if st.button('Apagar unidade selecionada'):
+			delete_unidade(int(id_u), int(id_e))
+			safe_rerun()
+
+
+def render_consultas():
+	st.header('Consultas pré-definidas')
+
+	# Define 4 queries (one includes a join)
+	queries = {
+		'1 - Contagem de empresas por cidade': {
+			'sql': 'SELECT cidade, COUNT(*) AS total_empresas FROM Empresa GROUP BY cidade ORDER BY total_empresas DESC',
+			'type': 'bar_city',
+			'tables': ['Empresa']
+		},
+		'2 - Unidades por empresa (join Empresa <> Unidade)': {
+			'sql': 'SELECT e.id_empresa AS empresa_id, e.nome_fantasia AS empresa_nome, COUNT(u.id_unidade) AS total_unidades FROM Empresa e LEFT JOIN Unidade u ON e.id_empresa = u.id_empresa GROUP BY e.id_empresa, e.nome_fantasia ORDER BY total_unidades DESC',
+			'type': 'bar_company',
+			'tables': ['Empresa', 'Unidade']
+		},
+		'3 - Média de valores por métrica (Registro <> Metrica)': {
+			'sql': 'SELECT m.id_metrica AS metrica_id, m.nome AS metrica_nome, AVG(r.valor_medido) AS media_valor FROM Registro r JOIN Metrica m ON r.id_metrica = m.id_metrica GROUP BY m.id_metrica, m.nome ORDER BY media_valor DESC',
+			'type': 'bar_metric',
+			'tables': ['Registro', 'Metrica']
+		},
+		'4 - Últimos registros validados (detalhado)': {
+			'sql': "SELECT id_registro, data_hora, valor_medido, status, id_unidade, id_empresa, id_metrica FROM Registro WHERE status='VALIDADO' ORDER BY data_hora DESC LIMIT 200",
+			'type': 'table_records',
+			'tables': ['Registro']
+		}
+	}
+
+	choice = st.selectbox('Escolha consulta', options=list(queries.keys()))
+	q = queries[choice]
+	st.code(q['sql'])
+
+	# Resolve required tables and substitute actual table names from sqlite_master
+	required = q.get('tables', [])
+	missing = []
+	resolved_map = {}
+	for tname in required:
+		res = resolve_table(tname)
+		if not res:
+			missing.append(tname)
+		else:
+			resolved_map[tname] = res
+	if missing:
+		st.info(f"Consultas requerem tabelas ausentes: {', '.join(missing)}. Use DB -> Inicializar DB (create_db.sql) ou crie as tabelas manualmente.")
+		return
+
+	# substitute occurrences of the original table names with resolved names (word-boundary safe)
+	sql = q['sql']
+	for orig, real in resolved_map.items():
+		pattern = re.compile(r"\b" + re.escape(orig) + r"\b", flags=re.IGNORECASE)
+		sql = pattern.sub(real, sql)
+
+	# Try executing; if fails, show message
+	try:
+		rows = db.execute(sql, fetch=True)
+	except Exception as e:
+		st.error(f'Erro executando consulta: {e}')
+		st.info('Verifique se as tabelas existem e o esquema é compatível. Use DB -> Inicializar DB se for o caso.')
+		return
+
+	df = pd.DataFrame(rows)
+	if df.empty:
+		st.info('Consulta retornou 0 linhas.')
+		return
+
+	# Render results and simple chart per type
+	st.subheader('Resultados')
+	st.dataframe(df)
+
+	if q['type'] == 'bar_city':
+		if 'cidade' in df.columns and 'total_empresas' in df.columns:
+			fig = px.bar(df.sort_values('total_empresas'), x='total_empresas', y='cidade', orientation='h', title='Empresas por cidade')
+			st.plotly_chart(fig, use_container_width=True)
+	elif q['type'] == 'bar_company':
+		if 'empresa_nome' in df.columns and 'total_unidades' in df.columns:
+			fig = px.bar(df.nlargest(20, 'total_unidades').sort_values('total_unidades'), x='total_unidades', y='empresa_nome', orientation='h', title='Top empresas por número de unidades')
+			st.plotly_chart(fig, use_container_width=True)
+	elif q['type'] == 'bar_metric':
+		if 'metrica_nome' in df.columns and 'media_valor' in df.columns:
+			fig = px.bar(df.sort_values('media_valor'), x='media_valor', y='metrica_nome', orientation='h', title='Média de valor por métrica')
+			st.plotly_chart(fig, use_container_width=True)
+	elif q['type'] == 'table_records':
+		if 'valor_medido' in df.columns:
+			fig = px.histogram(df, x='valor_medido', nbins=30, title='Histograma de valores medidos (validados)')
+			st.plotly_chart(fig, use_container_width=True)
+
 
 
 def main():
 	st.sidebar.title('Navegação')
-	page = st.sidebar.radio('Ir para', ['Dashboard', 'Empresas', 'Auditoria', 'Hierarquia', 'DB'])
+	page = st.sidebar.radio('Ir para', ['Dashboard', 'Empresas', 'Unidades', 'Consultas', 'Auditoria', 'Hierarquia', 'DB'])
 
 	if page == 'Dashboard':
 		render_dashboard()
 	elif page == 'Empresas':
 		render_empresas()
+	elif page == 'Unidades':
+		render_unidades()
+	elif page == 'Consultas':
+		render_consultas()
 	elif page == 'Auditoria':
 		render_auditoria()
 	elif page == 'Hierarquia':
 		render_hierarquia()
 	elif page == 'DB':
 		st.header('Inicializar / Inspecionar DB')
-		if st.button('Inicializar DB (create_db.sql)'):
-			sql_path = BASE_DIR / 'create_db.sql'
+		if st.button('Inicializar DB (create_sqlite.sql)'):
+			# prefer sqlite-compatible sql if present
+			sql_path = BASE_DIR / 'create_sqlite.sql'
+			if not sql_path.exists():
+				sql_path = BASE_DIR / 'create_db.sql'
 			db.init_db(str(sql_path))
-			st.success('init_db executado (ver backend.log se preciso)')
+			st.success(f'init_db executado usando {sql_path.name} (ver backend.log se preciso)')
 		st.write('DB path (sqlite fallback):', db.SQLITE_PATH if hasattr(db, 'SQLITE_PATH') else 'n/a')
 
 
